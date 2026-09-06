@@ -109,18 +109,31 @@ Transcript and presence analysis are finalised asynchronously by Tavus after a s
 
 The site is public; the product is not. Every live session spends conversational-video minutes and language-model tokens, so a visitor must enter an access code before reaching the application.
 
-Two codes are configured, and they define two tiers:
+There are two tiers, reached by three kinds of code:
 
-| Tier | Variable | Report | Sessions |
-| --- | --- | --- | --- |
-| Demo | `ACCESS_CODE_DEMO` | Complete, with download and print | Uncapped by default |
-| Sales | `ACCESS_CODE_SALES` | Headline verdict and measurements; the coaching detail is withheld | One by default |
+| Tier | Variable | Report | Sessions | Reusable |
+| --- | --- | --- | --- | --- |
+| Demo | `ACCESS_CODE_DEMO` | Complete, with download and print | Uncapped by default | Yes — one shared code for our own demos |
+| Sales | `ACCESS_CODES_TRIAL` | Headline verdict and measurements; the coaching detail is withheld | One by default | **No** — one-time codes, one per prospect |
+| Sales | `ACCESS_CODE_SALES` | As above | One per browser session | Yes — deprecated, see below |
 
-Codes are compared case-insensitively with surrounding whitespace trimmed, so a code read aloud or copied off a slide still works.
+Codes are compared case-insensitively with surrounding whitespace trimmed, so a code read aloud or copied off a slide still works. One-time codes additionally ignore spaces and dashes, since they are typed off an email and frequently on a phone: `QFWORK-TRIAL-a308b5`, `qfwork trial a308b5` and `QFWORKTRIALA308B5` are the same code.
+
+### One-time trial codes
+
+`ACCESS_CODES_TRIAL` holds a comma-separated list. Issue a batch with:
+
+```bash
+node -e "for(let i=0;i<25;i++)console.log('QFWORK-TRIAL-'+require('crypto').randomBytes(3).toString('hex'))"
+```
+
+Each code carries **its own run counter**, which is what makes it one-time. The counter for the shared codes lives on the browser session, so anyone who opens a private tab starts a fresh session and gets another run; a one-time code is presented again on that new session and is refused. A recipient can also be linked straight in with `?code=QFWORK-TRIAL-a308b5`, which fills the gate in for them and then strips the code from the address bar.
+
+`ACCESS_CODE_SALES` is the older shared code for prospects. It still works so nothing breaks mid-flight, but it has exactly the reload weakness described above; prefer the one-time list and leave it blank.
 
 **The browser gate is not the control.** `public/access-gate.js` covers the page so visitors see a code prompt instead of a live product, but it is bypassable by anyone reading the page source. The restriction that matters is server-side: `/api/conversation`, `/api/analyze` and `/api/interview-feedback` each require a session token issued by `/api/access`, and the trial run is charged inside `/api/conversation` — the moment conversational-video billing begins. Reloading the page therefore cannot buy additional sessions, and the codes themselves are never sent to the browser.
 
-Sessions are held in server memory with a four-hour sliding expiry. A redeploy clears them, which allows at most a few extra trial runs; persisting them would mean introducing a database for a demo gate.
+Sessions are held in server memory with a four-hour sliding expiry; a restart clears them, and the visitor simply enters their code again. What a one-time code has *spent* is separate state and is written to disk — `TRIAL_CODES_STATE`, by default `trial-codes-used.json` beside `server.js` — so a restart cannot hand a used code back. That default file lives inside the container and is therefore rebuilt on redeploy; point the variable at a mounted volume (`/data/trial-codes-used.json`) if codes must stay spent across deployments. The issued list itself is configuration and stays in the environment, so only the tally needs persisting — no database.
 
 On the sales tier the withheld sections — presence, the voice narrative, line-by-line corrections, the model answer, and all but the first strength and improvement — are **removed from the response** by `redactForTier()` in `access.js` rather than hidden with CSS. They are consequently absent from the page source, from Print / Save as PDF and from the HTML export. The report shows a locked placeholder in their place, alongside a link to the free consultation.
 

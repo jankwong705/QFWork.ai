@@ -54,7 +54,8 @@ app.use(express.static('public'));
 //   → { ok, tier, runsLeft, calendlyUrl }
 //
 // The tier decides how much of the report the visitor sees and how many
-// calls they get; see access.js.
+// calls they get. A one-time code additionally carries its own run counter,
+// so a spent code is refused here rather than at the first call; see access.js.
 // ============================================================
 app.post('/api/access', (req, res) => {
   if (!access.isConfigured()) {
@@ -63,18 +64,35 @@ app.post('/api/access', (req, res) => {
   if (access.tooManyAttempts(req.ip)) {
     return res.status(429).json({ error: 'Too many attempts. Please wait a minute and try again.' });
   }
-  const tier = access.checkCode(req.body && req.body.code);
-  if (!tier) {
+  const match = access.checkCode(req.body && req.body.code);
+  if (!match) {
     return res.status(401).json({ error: "That code isn't valid. Check it and try again, or contact us for access." });
   }
+  // Recognising the code proves this is not a guessing loop, so the attempt
+  // counter is cleared even when the code turns out to be spent. Without this,
+  // someone re-entering their own used code a few times would hit the rate
+  // limiter and get "too many attempts" instead of the message that explains
+  // what actually happened.
   access.clearAttempts(req.ip);
-  const token   = access.openSession(tier);
+
+  // A one-time code with nothing left. The booking link travels with the
+  // refusal so the dead end still leads somewhere.
+  if (access.trialSpent(match.code)) {
+    console.log('[access] one-time code already spent');
+    return res.status(403).json({
+      error: 'This code has already been used. Book a free review with one of our recruitment experts to go further.',
+      code:  'trial-spent',
+      calendlyUrl: process.env.CALENDLY_URL || ''
+    });
+  }
+
+  const token   = access.openSession(match.tier, match.code);
   const session = access.getSession(token);
-  console.log(`[access] ${tier} session opened`);
+  console.log(`[access] ${match.tier} session opened${match.code ? ' (one-time code)' : ''}`);
   return res.status(200).json({
     ok: true,
     token,
-    tier,
+    tier: match.tier,
     runsLeft:    access.runsLeft(session),
     calendlyUrl: process.env.CALENDLY_URL || ''
   });
@@ -380,8 +398,12 @@ server.listen(PORT, () => {
   const cap = (t) => access.runCap(t) === access.UNLIMITED ? 'unlimited runs' : `${access.runCap(t)} run(s)`;
   if (access.isConfigured()) {
     console.log(`  Access : demo code ${state(!!process.env.ACCESS_CODE_DEMO)} (${cap('demo')})  ·  sales code ${state(!!process.env.ACCESS_CODE_SALES)} (${cap('sales')})`);
+    const t = access.trialStats();
+    console.log(t.total
+      ? `  Trial  : ${t.total} one-time code(s) · ${t.used} used · ${t.total - t.used} left (${cap('sales')} each)`
+      : `  Trial  : no one-time codes set — issue some into ACCESS_CODES_TRIAL`);
   } else {
-    console.log(`  Access : NO CODES SET — the trial is closed to everyone. Set ACCESS_CODE_DEMO and/or ACCESS_CODE_SALES in .env`);
+    console.log(`  Access : NO CODES SET — the trial is closed to everyone. Set ACCESS_CODE_DEMO and/or ACCESS_CODES_TRIAL in .env`);
   }
   // With no URL the booking card is hidden rather than shown broken, so this
   // line is the only place a missing link becomes visible.

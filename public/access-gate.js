@@ -76,6 +76,7 @@
     '#qf-gate-btn:hover:not(:disabled){background:#0a5f56;}',
     '#qf-gate-btn:disabled{opacity:.55;cursor:not-allowed;}',
     '#qf-gate-err{min-height:19px;margin:11px 0 0;font-size:13px;line-height:1.5;color:#dc2626;}',
+    '#qf-gate-err a{display:inline-block;margin-top:7px;color:#0d7a6f;font-weight:600;}',
     '.qf-gate-foot{margin:20px 0 0;padding-top:18px;border-top:1px solid #eef2f4;',
     '  font-size:12.5px;line-height:1.55;color:#98a2b3;}',
     '.qf-gate-foot a{color:#0d7a6f;}',
@@ -101,7 +102,7 @@
     '  <form id="qf-gate-form" novalidate>',
     '    <label for="qf-gate-input">Access code</label>',
     '    <input id="qf-gate-input" type="text" name="code" autocomplete="off" autocapitalize="off"',
-    '           spellcheck="false" placeholder="e.g. QFWORK-2026" aria-describedby="qf-gate-err" />',
+    '           spellcheck="false" placeholder="e.g. QFWORK-TRIAL-a308b5" aria-describedby="qf-gate-err" />',
     '    <p id="qf-gate-err" role="alert" aria-live="polite"></p>',
     '    <button id="qf-gate-btn" type="submit">Continue</button>',
     '  </form>',
@@ -133,6 +134,32 @@
     input.select();
   }
 
+  // A used-up one-time code is a dead end: retyping it will never work, so the
+  // refusal offers the booking link instead of inviting another attempt.
+  // The message is set as text, never HTML — it comes from the server.
+  function failSpent(msg, url) {
+    err.textContent = msg;
+    input.classList.add('qf-bad');
+    if (!url) return;
+    err.appendChild(document.createElement('br'));
+    var a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = 'Book your free review →';
+    err.appendChild(a);
+  }
+
+  // A code carried in the link (?code=QFWORK-TRIAL-a308b5). These are emailed
+  // to people who open them on a phone, where typing the code by thumb is the
+  // worst part of the experience.
+  function codeFromUrl() {
+    try {
+      var v = new URLSearchParams(location.search).get('code');
+      return v ? v.trim() : '';
+    } catch (e) { return ''; }
+  }
+
   async function submit(e) {
     if (e) e.preventDefault();
     var code = (input.value || '').trim();
@@ -148,6 +175,9 @@
         body: JSON.stringify({ code: code })
       });
       var data = await r.json().catch(function () { return {}; });
+      if (r.status === 403 && data.code === 'trial-spent') {
+        return failSpent(data.error || 'This code has already been used.', data.calendlyUrl);
+      }
       if (!r.ok) return fail(data.error || 'Could not check that code. Please try again.');
       session = {
         token: data.token, tier: data.tier,
@@ -194,7 +224,20 @@
     load();
     lock();                       // locked by default — never flash the product
     document.documentElement.classList.remove('qf-booting');
-    revalidate().then(function (ok) { if (ok) unlock(); });
+    revalidate().then(function (ok) {
+      if (ok) return unlock();
+      var pre = codeFromUrl();
+      if (!pre) return;
+      input.value = pre;
+      // Take the code back out of the address bar — these links get screen-
+      // shared, and a stale one in history is just confusing.
+      try {
+        var u = new URL(location.href);
+        u.searchParams.delete('code');
+        history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+      } catch (e) {}
+      submit();
+    });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
