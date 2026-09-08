@@ -245,7 +245,18 @@ Any container or VM host is suitable. Deployment consists of:
 
 ### Landing-page photography
 
-Both landing pages show a four-image showcase drawn from `public/img/`. The repository ships placeholder SVGs. To use real photographs, save them as `showcase-1.jpg` through `showcase-4.jpg` in that folder and update the four `src` attributes in `public/exam.html` and `public/index.html`. Images are lazily loaded and fall back to a neutral tile if a file is missing, so the section cannot break the page. Landscape crops around 8:5 fit the layout without cropping.
+Every image on the two landing pages is a placeholder shipped in `public/img/`. All of them are lazily loaded and fall back to a neutral tile if the file is missing, so no section can break the page. Landscape crops around 8:5 fit the layouts without cropping.
+
+| Where | Placeholder | Replace with |
+| --- | --- | --- |
+| `exam.html` — product showcase under the headline | `app-preview.svg`, `app-preview-you.svg` | A 16:9 screenshot or still of a live session, plus a small self-view tile |
+| `exam.html` — sponsor row | `sponsors/sponsor-1.svg` … `sponsor-5.svg` | Partner logos, transparent background, roughly 60px tall |
+| `exam.html` — "Who we are" gallery | `event-1.png` … `event-3.png` (real event photography) | — already real; swap freely, but keep each figure's `--ar` and `width`/`height` in step with the file |
+| `index.html` — four-image showcase | `showcase-1.svg` … `showcase-4.svg` | Photographs saved as `showcase-1.jpg` … `showcase-4.jpg` |
+
+In every case, save the new file and update the matching `src` attribute in the page. Nothing else changes.
+
+The "Who we are" copy on `exam.html` is draft text and carries a visible placeholder note until it is replaced.
 
 ## API
 
