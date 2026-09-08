@@ -90,15 +90,20 @@
   /* the mock itself — deliberately modest, it illustrates rather than competes */
   .mock{ width:100%; max-width:430px; margin-left:auto; border:1px solid var(--line);
          border-radius:16px; padding:12px; background:var(--card); box-shadow:var(--shadow); }
-  .mock-stage{ position:relative; background:#0b1220; border-radius:11px; overflow:hidden; aspect-ratio:16/9; }
-  .mock-stage>img{ display:block; width:100%; height:100%; object-fit:cover; }
+  .mock-stage{ position:relative; background:linear-gradient(180deg,#0f1e33 0%, #0a1323 52%, #091421 100%); border-radius:11px; overflow:hidden; aspect-ratio:16/9; }
+  .mock-stage>img{ display:block; width:100%; height:100%; object-fit:cover; filter:brightness(.75) saturate(.8) contrast(1.04); }
   .mock-badge{ position:absolute; top:8px; right:8px; background:rgba(255,255,255,.92); color:var(--ink);
                font-size:10px; font-weight:600; padding:4px 9px; border-radius:999px; }
-  .mock-pip{ position:absolute; top:8px; left:8px; width:25%; aspect-ratio:4/3; border-radius:7px;
-             overflow:hidden; border:2px solid rgba(255,255,255,.7); background:#16233a; }
-  .mock-pip img{ display:block; width:100%; height:100%; object-fit:cover; }
-  .mock-pip span{ position:absolute; left:4px; bottom:3px; font-size:8px; font-weight:600; color:#fff;
+  .mock-pip{ position:absolute; top:8px; right:8px; width:92px; aspect-ratio:4/3; border-radius:7px;
+             overflow:hidden; border:2px solid rgba(255,255,255,.7); background:linear-gradient(180deg,#1a2c42,#131d2d); box-shadow:0 8px 18px rgba(7,12,25,.22);
+             z-index:2; }
+  .mock-pip img{ display:block; width:100%; height:100%; object-fit:cover; filter:brightness(1.02) saturate(.85) contrast(.96); }
+  .mock-pip span{ position:absolute; left:6px; bottom:4px; font-size:8px; font-weight:600; color:#fff;
                   background:rgba(2,6,23,.62); padding:1px 4px; border-radius:3px; }
+  .mock-name{ position:absolute; left:12px; bottom:12px; display:inline-flex; align-items:center; gap:8px;
+              background:rgba(10,16,26,.52); color:#fff; border:1px solid rgba(255,255,255,.18);
+              border-radius:999px; padding:5px 10px; font-size:11px; font-weight:600; backdrop-filter:blur(4px); }
+  .mock-name::before{ content:""; width:8px; height:8px; border-radius:50%; background:#35d399; display:block; }
   .mock-ctrls{ display:flex; flex-wrap:wrap; justify-content:center; gap:6px; margin:11px 0; }
   .mock-ctrl{ display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); border-radius:8px;
               padding:5px 9px; font-size:10.5px; color:var(--mut); background:#fcfdfd; white-space:nowrap; }
@@ -395,35 +400,18 @@
          controls in the #room view, which is why the mock is aria-hidden. -->
     <section class="hero-showcase">
       <div class="hs-copy">
-        <span class="trial-flag">✓ Free trial available</span>
         <p class="eyebrow">Live practice</p>
         <h1 class="hero serif">AI Trainer for workplace communication</h1>
         <p class="lede">Have a real, face-to-face conversation with an AI partner — then get a full breakdown of your workplace English. Pick a scenario to begin.</p>
-        <ul class="hs-feats">
-          <li class="feat"><span class="feat-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
-            <span><b>Communication skills training</b> <i>— wording, structure and delivery</i></span></li>
-          <li class="feat"><span class="feat-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
-            <span><b>Workplace scenario simulations</b> <i>— interviews, negotiations, presentations, client meetings</i></span></li>
-          <li class="feat"><span class="feat-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
-            <span><b>Personalised readiness score</b> <i>— language, voice and presence, measured</i></span></li>
-        </ul>
-        <button class="hs-cta" type="button"
-                onclick="document.getElementById('scnGrid').scrollIntoView({behavior:'smooth',block:'center'})">
-          Start practising now <span aria-hidden="true">→</span>
-        </button>
-        <div class="hs-tags">
-          <span class="hs-tag">AI-powered</span>
-          <span class="hs-tag">Measured feedback</span>
-          <span class="hs-tag">Expert follow-up</span>
-        </div>
       </div>
 
       <div class="mock" aria-hidden="true">
         <div class="mock-stage">
-          <img src="img/app-preview.svg" alt="" loading="lazy" />
+          <img src="img/ai-interviewer.jpg" alt="" loading="lazy" style="object-position:center 32%; filter:brightness(.72) saturate(.8) contrast(1.05);" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'shot-missing',textContent:'AI interviewer image missing'}))" />
           <span class="mock-badge">AI partner</span>
+          <span class="mock-name">QFwork Interviewer</span>
           <span class="mock-pip">
-            <img src="img/app-preview-you.svg" alt="" loading="lazy" />
+            <img src="img/ai-interviewee.jpg" alt="" loading="lazy" style="object-position:center 20%; filter:brightness(1.04) saturate(.9) contrast(1.02);" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'shot-missing',textContent:'User image missing'}))" />
             <span>You</span>
           </span>
         </div>
@@ -531,16 +519,11 @@
           <img src="img/event-2.png" alt="The QFwork team demonstrating the product to visitors at the HKUST Entrepreneurship Center booth" width="1320" height="864" loading="lazy"
                onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'shot-missing',textContent:'Photo coming soon'}))" />
         </figure>
-        <figure style="--ar:1.357">
-          <img src="img/event-1.png" alt="Four members of the QFwork team at their exhibition stand" width="684" height="504" loading="lazy"
-               onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'shot-missing',textContent:'Photo coming soon'}))" />
-        </figure>
         <figure style="--ar:0.750">
           <img src="img/event-3.png" alt="Three members of the QFwork team at the HKUST Startups at AI+ In Action booth" width="1536" height="2048" loading="lazy"
                onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'shot-missing',textContent:'Photo coming soon'}))" />
         </figure>
       </div>
-      <p class="company-foot">Draft copy — the section text above is a placeholder.</p>
     </section>
   </section>
 
