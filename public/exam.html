@@ -9,9 +9,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;450;500;600;700&display=swap" rel="stylesheet">
-<!-- Access gate. Loaded first so the code prompt covers the page before any
-     of the product is painted. The server enforces the real restriction. -->
-<!-- <script src="access-gate.js"></script> !-->
+<!-- Access gate. The landing page is public; the code prompt opens as a
+     modal when a visitor picks a scenario. The server enforces the real
+     restriction — every token-spending endpoint requires the session. -->
+<script src="access-gate.js"></script>
 <style>
   :root{
     --teal:#0d7a6f; --teal-d:#0a5f56; --orange:#ef6a3d;
@@ -666,8 +667,14 @@ $('scnGrid').innerHTML = SCENARIOS.map((s,i) => `
       <span class="go">Start call →</span>
     </span>
   </button>`).join('');
+// Picking a scenario is the first step that leads to a paid call, so this is
+// where the code is asked for. Visitors who never click one read the page and
+// are never prompted; QFAccess.require runs straight through once unlocked.
 document.querySelectorAll('.scn').forEach(el =>
-  el.addEventListener('click', () => openPrecall(SCENARIOS[+el.dataset.i]))
+  el.addEventListener('click', () => {
+    const s = SCENARIOS[+el.dataset.i];
+    QFAccess.require(() => openPrecall(s), s.title);
+  })
 );
 
 // ── view switching (class-based, robust) ──
@@ -780,12 +787,16 @@ function openPrecall(s){
 // which means the call itself joins with a single click.
 let dev = { stream:null, ctx:null, raf:null };
 
-async function startCall(){
-  state.userContext = $('ctx').value;
-  show('devcheck');
-  $('dcStatus').textContent = '';
-  $('joinBtn').disabled = true;
-  await openDevices();
+function startCall(){
+  // Re-checked rather than assumed: the precall form can sit open long enough
+  // for the session to lapse, and the device check is a poor place to find out.
+  QFAccess.require(async () => {
+    state.userContext = $('ctx').value;
+    show('devcheck');
+    $('dcStatus').textContent = '';
+    $('joinBtn').disabled = true;
+    await openDevices();
+  }, state.scenarioTitle);
 }
 
 async function openDevices(camId, micId){

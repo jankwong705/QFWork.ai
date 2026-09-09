@@ -1,24 +1,33 @@
 // ============================================================
 // QFwork.ai — Access gate (shared by index.html and exam.html)
 // ------------------------------------------------------------
-// Covers the page with a code prompt until the server hands back a trial
-// session. Loaded as a plain script by both pages, so the gate lives in
-// one place and neither page needs a build step.
+// The landing page is public. The code prompt is a modal that opens the
+// moment a visitor asks for something that costs us money — picking a
+// scenario, starting a call — and closes again when they have a session.
+// Loaded as a plain script by both pages, so the gate lives in one place
+// and neither page needs a build step.
 //
-// This is the front door, not the lock: it exists so visitors see a code
+// This is the front door, not the lock: it exists so a visitor sees a code
 // prompt rather than a live product. The actual control is server-side —
 // /api/conversation, /api/analyze and /api/interview-feedback all require
-// the session token this script obtains. Bypassing the overlay gets you a
-// landing page and nothing else.
+// the session token this script obtains. Clicking past the modal in the
+// console gets you a UI that 401s.
 //
-// Exposes:
-//   window.QFAccess.token()        → session token, or null
-//   window.QFAccess.tier()         → 'demo' | 'sales' | null
-//   window.QFAccess.calendlyUrl()  → booking link from the server
-//   window.QFAccess.runsLeft()     → number, or null when uncapped
-//   window.QFAccess.headers()      → { 'X-QF-Access': token } for fetch()
-//   window.QFAccess.expired()      → re-show the gate (a 401 came back)
-// Fires a 'qf-access-granted' event on document once the page is unlocked.
+// The usual call is require(): it runs your callback now if the visitor
+// already has a session, and otherwise opens the modal and runs it once
+// they enter a working code.
+//
+//   window.QFAccess.require(fn)     → run fn once unlocked (opens the modal)
+//   window.QFAccess.unlocked()      → true when a session is already held
+//   window.QFAccess.ready()         → promise, resolves when the boot check ends
+//   window.QFAccess.open()          → open the modal with no pending action
+//   window.QFAccess.token()         → session token, or null
+//   window.QFAccess.tier()          → 'demo' | 'sales' | null
+//   window.QFAccess.calendlyUrl()   → booking link from the server
+//   window.QFAccess.runsLeft()      → number, or null when uncapped
+//   window.QFAccess.headers()       → { 'X-QF-Access': token } for fetch()
+//   window.QFAccess.expired()       → drop the session, re-open the modal (401)
+// Fires a 'qf-access-granted' event on document each time a code is accepted.
 // ============================================================
 (function () {
   'use strict';
@@ -26,9 +35,10 @@
   var STORE_KEY = 'qfAccess';
   var session = { token: null, tier: null, runsLeft: null, calendlyUrl: '' };
 
-  // Hide the page from the first parsed byte. The overlay can only be appended
-  // once <body> exists, and without this the product flashes up in between.
-  document.documentElement.classList.add('qf-booting');
+  var pendingAction = null;   // what the visitor clicked before the modal opened
+  var pendingErr    = '';     // message to show the first time the modal opens
+  var readyPromise  = null;   // resolves once the boot-time check has settled
+  var lastFocus     = null;   // element to hand focus back to on close
 
   // ── persisted session ──
   // sessionStorage, not localStorage: closing the tab ends the trial, and the
@@ -51,13 +61,17 @@
   var css = document.createElement('style');
   css.textContent = [
     '#qf-gate{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:24px;',
-    '  background:#0d1b24;background-image:radial-gradient(70% 60% at 80% 10%,rgba(13,122,111,.35),transparent 65%),',
-    '  radial-gradient(60% 60% at 10% 95%,rgba(239,106,61,.22),transparent 65%);',
-    '  font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;overflow-y:auto;}',
+    '  background:rgba(13,27,36,.72);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);',
+    '  font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;overflow-y:auto;',
+    '  animation:qf-gate-fade .18s ease both;}',
     '#qf-gate[hidden]{display:none;}',
-    '.qf-gate-card{width:100%;max-width:420px;background:#fff;border-radius:20px;padding:34px 30px 30px;',
+    '@keyframes qf-gate-fade{from{opacity:0}to{opacity:1}}',
+    '.qf-gate-card{position:relative;width:100%;max-width:420px;background:#fff;border-radius:20px;padding:34px 30px 30px;',
     '  box-shadow:0 30px 70px rgba(2,6,23,.45);animation:qf-gate-rise .4s cubic-bezier(.22,.61,.36,1) both;}',
     '@keyframes qf-gate-rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}',
+    '#qf-gate-close{position:absolute;top:14px;right:14px;width:32px;height:32px;border:0;border-radius:9px;',
+    '  background:transparent;color:#98a2b3;font-size:21px;line-height:1;cursor:pointer;transition:.15s;}',
+    '#qf-gate-close:hover{background:#f2f4f7;color:#475467;}',
     '.qf-gate-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px;}',
     '.qf-gate-brand img{width:34px;height:34px;object-fit:contain;display:block;}',
     '.qf-gate-brand .qf-gate-mark{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;',
@@ -66,6 +80,7 @@
     '.qf-gate-brand .qf-gate-name span{color:#0d7a6f;}',
     '.qf-gate-card h2{margin:0 0 8px;font-size:21px;letter-spacing:-.01em;color:#101828;font-weight:600;}',
     '.qf-gate-card p.qf-gate-lede{margin:0 0 22px;font-size:14px;line-height:1.55;color:#667085;}',
+    '.qf-gate-card p.qf-gate-lede b{color:#101828;font-weight:600;}',
     '.qf-gate-card label{display:block;font-size:13px;font-weight:600;color:#101828;margin-bottom:7px;}',
     '#qf-gate-input{width:100%;box-sizing:border-box;border:1px solid #e7eaee;border-radius:12px;',
     '  padding:13px 15px;font:inherit;font-size:16px;letter-spacing:.06em;color:#101828;background:#fcfdfd;}',
@@ -80,25 +95,26 @@
     '.qf-gate-foot{margin:20px 0 0;padding-top:18px;border-top:1px solid #eef2f4;',
     '  font-size:12.5px;line-height:1.55;color:#98a2b3;}',
     '.qf-gate-foot a{color:#0d7a6f;}',
-    'html.qf-locked,body.qf-locked{overflow:hidden;}',
-    'html.qf-booting body{visibility:hidden!important;}'
+    'html.qf-locked,body.qf-locked{overflow:hidden;}'
   ].join('');
   document.head.appendChild(css);
 
   // ── overlay ──
   var overlay = document.createElement('div');
   overlay.id = 'qf-gate';
+  overlay.hidden = true;
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-label', 'Access code required');
   overlay.innerHTML = [
     '<div class="qf-gate-card">',
+    '  <button id="qf-gate-close" type="button" aria-label="Close">&times;</button>',
     '  <div class="qf-gate-brand">',
     '    <img src="logo-mark.png" alt="" onerror="this.replaceWith(Object.assign(document.createElement(\'div\'),{className:\'qf-gate-mark\',textContent:\'QF\'}))" />',
     '    <div class="qf-gate-name">QFwork<span>.ai</span></div>',
     '  </div>',
     '  <h2>Enter your access code</h2>',
-    '  <p class="qf-gate-lede">Live practice sessions are invite-only while we are in trial. Enter the code from your invitation to begin.</p>',
+    '  <p class="qf-gate-lede" id="qf-gate-lede">Live practice sessions are invite-only while we are in trial. Enter the code from your invitation to begin.</p>',
     '  <form id="qf-gate-form" novalidate>',
     '    <label for="qf-gate-input">Access code</label>',
     '    <input id="qf-gate-input" type="text" name="code" autocomplete="off" autocapitalize="off"',
@@ -110,21 +126,55 @@
     '</div>'
   ].join('');
 
-  var input, btn, err;
+  var input, btn, err, lede;
+  var DEFAULT_LEDE = 'Live practice sessions are invite-only while we are in trial. Enter the code from your invitation to begin.';
 
-  function lock() {
+  // `label` names the thing the visitor just clicked, so the modal explains
+  // itself ("…to start Salary Negotiation") instead of appearing out of
+  // nowhere over a page they were happily reading.
+  function open(label) {
+    lastFocus = document.activeElement;
     document.documentElement.classList.add('qf-locked');
     if (document.body) document.body.classList.add('qf-locked');
     overlay.hidden = false;
-    if (input) { input.value = ''; input.classList.remove('qf-bad'); setTimeout(function () { input.focus(); }, 80); }
+    if (lede) {
+      lede.innerHTML = '';
+      if (label) {
+        lede.appendChild(document.createTextNode('Live practice sessions are invite-only while we are in trial. Enter the code from your invitation to start '));
+        var b = document.createElement('b');
+        b.textContent = label;
+        lede.appendChild(b);
+        lede.appendChild(document.createTextNode('.'));
+      } else {
+        lede.textContent = DEFAULT_LEDE;
+      }
+    }
+    if (err) { err.textContent = pendingErr; pendingErr = ''; }
+    if (input) {
+      input.value = '';
+      input.classList.remove('qf-bad');
+      setTimeout(function () { input.focus(); }, 80);
+    }
   }
-  function unlock() {
+
+  // Closing abandons whatever the visitor clicked — they are back on a page
+  // they can read, which is the whole point of gating late.
+  function close() {
     overlay.hidden = true;
     document.documentElement.classList.remove('qf-locked');
     if (document.body) document.body.classList.remove('qf-locked');
+    pendingAction = null;
+    if (lastFocus && lastFocus.focus) { try { lastFocus.focus(); } catch (e) {} }
+    lastFocus = null;
+  }
+
+  function granted() {
+    var action = pendingAction;
+    close();
     document.dispatchEvent(new CustomEvent('qf-access-granted', {
       detail: { tier: session.tier, runsLeft: session.runsLeft, calendlyUrl: session.calendlyUrl }
     }));
+    if (action) { try { action(); } catch (e) { console.error(e); } }
   }
 
   function fail(msg) {
@@ -160,6 +210,39 @@
     } catch (e) { return ''; }
   }
 
+  // Trade a code for a session. `quiet` is the boot-time path for a ?code=
+  // link: it must not pop the modal open over a page nobody has clicked yet,
+  // so a refusal is parked in pendingErr and shown at the first click instead.
+  async function redeem(code, quiet) {
+    var r = await fetch('/api/access', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: code })
+    });
+    var data = await r.json().catch(function () { return {}; });
+
+    if (r.status === 403 && data.code === 'trial-spent') {
+      var spent = data.error || 'This code has already been used.';
+      if (quiet) { pendingErr = spent; return false; }
+      failSpent(spent, data.calendlyUrl);
+      return false;
+    }
+    if (!r.ok) {
+      var msg = data.error || 'Could not check that code. Please try again.';
+      if (quiet) { pendingErr = msg; return false; }
+      fail(msg);
+      return false;
+    }
+
+    session = {
+      token: data.token, tier: data.tier,
+      runsLeft: data.runsLeft == null ? null : data.runsLeft,
+      calendlyUrl: data.calendlyUrl || ''
+    };
+    save();
+    return true;
+  }
+
   async function submit(e) {
     if (e) e.preventDefault();
     var code = (input.value || '').trim();
@@ -169,23 +252,7 @@
     err.textContent = '';
     input.classList.remove('qf-bad');
     try {
-      var r = await fetch('/api/access', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code })
-      });
-      var data = await r.json().catch(function () { return {}; });
-      if (r.status === 403 && data.code === 'trial-spent') {
-        return failSpent(data.error || 'This code has already been used.', data.calendlyUrl);
-      }
-      if (!r.ok) return fail(data.error || 'Could not check that code. Please try again.');
-      session = {
-        token: data.token, tier: data.tier,
-        runsLeft: data.runsLeft == null ? null : data.runsLeft,
-        calendlyUrl: data.calendlyUrl || ''
-      };
-      save();
-      unlock();
+      if (await redeem(code, false)) granted();
     } catch (e2) {
       fail('Network problem — check your connection and try again.');
     } finally {
@@ -195,8 +262,8 @@
   }
 
   // A stored token may have expired while the tab sat open, or the server may
-  // have restarted. Confirm it before revealing the page, so the visitor hits
-  // the code prompt now rather than a 401 halfway into a call.
+  // have restarted. Confirm it before letting a click straight through, so the
+  // visitor hits the code prompt now rather than a 401 halfway into a call.
   async function revalidate() {
     if (!session.token) return false;
     try {
@@ -214,34 +281,44 @@
     }
   }
 
-  function boot() {
+  // Settle the session question once, in the background, while the visitor
+  // reads the page. By the time anyone clicks, require() answers instantly.
+  async function boot() {
+    load();
+    if (await revalidate()) return true;
+
+    var pre = codeFromUrl();
+    if (!pre) return false;
+
+    // Take the code back out of the address bar — these links get screen-
+    // shared, and a stale one in history is just confusing.
+    try {
+      var u = new URL(location.href);
+      u.searchParams.delete('code');
+      history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+    } catch (e) {}
+
+    try { return await redeem(pre, true); } catch (e) { return false; }
+  }
+
+  function attach() {
     document.body.appendChild(overlay);
     input = document.getElementById('qf-gate-input');
     btn   = document.getElementById('qf-gate-btn');
     err   = document.getElementById('qf-gate-err');
+    lede  = document.getElementById('qf-gate-lede');
     document.getElementById('qf-gate-form').addEventListener('submit', submit);
-
-    load();
-    lock();                       // locked by default — never flash the product
-    document.documentElement.classList.remove('qf-booting');
-    revalidate().then(function (ok) {
-      if (ok) return unlock();
-      var pre = codeFromUrl();
-      if (!pre) return;
-      input.value = pre;
-      // Take the code back out of the address bar — these links get screen-
-      // shared, and a stale one in history is just confusing.
-      try {
-        var u = new URL(location.href);
-        u.searchParams.delete('code');
-        history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
-      } catch (e) {}
-      submit();
+    document.getElementById('qf-gate-close').addEventListener('click', close);
+    overlay.addEventListener('mousedown', function (e) { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !overlay.hidden) close();
     });
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', attach);
+  else attach();
+
+  readyPromise = boot();
 
   window.QFAccess = {
     token:       function () { return session.token; },
@@ -250,7 +327,30 @@
     calendlyUrl: function () { return session.calendlyUrl; },
     setRunsLeft: function (n) { session.runsLeft = n == null ? null : n; save(); },
     headers:     function () { return session.token ? { 'X-QF-Access': session.token } : {}; },
+    unlocked:    function () { return !!session.token; },
+    ready:       function () { return readyPromise; },
+    open:        function (label) { open(label); },
+
+    // The gate, as the pages use it. Runs `fn` immediately when a session is
+    // already in hand; otherwise parks it behind the modal. `label` is the
+    // human name of what was clicked, for the modal's opening line.
+    require: function (fn, label) {
+      if (session.token) return fn();
+      pendingAction = fn;
+      // The boot check may still be in flight on a fast click — wait for it
+      // rather than asking for a code the visitor has already supplied.
+      readyPromise.then(function (ok) {
+        if (pendingAction !== fn) return;          // closed or superseded
+        if (ok && session.token) return granted();
+        open(label);
+      });
+    },
+
     // Called by the pages when an API returns 401 mid-flow.
-    expired:     function () { clear(); lock(); err.textContent = 'Your session expired. Please enter your code again.'; }
+    expired: function () {
+      clear();
+      pendingErr = 'Your session expired. Please enter your code again.';
+      open();
+    }
   };
 })();

@@ -10,8 +10,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500;1,9..144,600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-  <!-- Access gate. Loaded first so the code prompt covers the page before any
-       of the product is painted. The server enforces the real restriction. -->
+  <!-- Access gate. The landing page is public; the code prompt opens as a
+       modal when a visitor picks a scenario. The server enforces the real
+       restriction — every token-spending endpoint requires the session. -->
   <script src="access-gate.js"></script>
 
   <style>
@@ -617,7 +618,12 @@
     }
     function selectScenarioById(id){ const sc=SCENARIOS.find(s=>s.id===id); if(sc) selectScenario(sc); }
 
-    function selectScenario(sc){
+    // Every entry point into a scenario funnels through here — the hero button,
+    // the featured card and the grid — so this is the one place the code is
+    // asked for. Nobody is prompted for simply reading the page.
+    function selectScenario(sc){ QFAccess.require(()=>enterScenario(sc), sc.title); }
+
+    function enterScenario(sc){
       state.selectedScenario=sc; clearTranscript();
       document.getElementById('pScenarioLabel').textContent=sc.title;
       document.getElementById('pSceneHeadline').textContent=sc.sceneHeadline;
@@ -676,13 +682,17 @@
       if(!res.ok){ const err=await res.json().catch(()=>({})); throw new Error(err.error||`Server error (${res.status})`); }
       return await res.json();
     }
-    async function analyzeTranscript(){
+    function analyzeTranscript(){
       const wc=state.transcript.trim().split(/\s+/).filter(Boolean).length;
       if(wc<5){ showToast('Please speak a little more before analyzing.'); return; }
-      if(state.isRecording&&state.recognition) state.recognition.stop();
-      showScreen('loadingScreen');
-      try{ const fb=await callOurServer(state.transcript,state.selectedScenario); displayFeedback(fb); showScreen('feedbackScreen'); }
-      catch(err){ console.error(err); showToast('❌ Analysis failed: '+err.message); showScreen('practiceScreen'); }
+      // Re-checked rather than assumed: a long practice session can outlive the
+      // trial session, and a spinner is a poor place to discover that.
+      QFAccess.require(async ()=>{
+        if(state.isRecording&&state.recognition) state.recognition.stop();
+        showScreen('loadingScreen');
+        try{ const fb=await callOurServer(state.transcript,state.selectedScenario); displayFeedback(fb); showScreen('feedbackScreen'); }
+        catch(err){ console.error(err); showToast('❌ Analysis failed: '+err.message); showScreen('practiceScreen'); }
+      }, 'your speech analysis');
     }
 
     function verdictFor(s){

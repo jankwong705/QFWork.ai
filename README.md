@@ -127,11 +127,11 @@ Codes are compared case-insensitively with surrounding whitespace trimmed, so a 
 node -e "for(let i=0;i<25;i++)console.log('QFWORK-TRIAL-'+require('crypto').randomBytes(3).toString('hex'))"
 ```
 
-Each code carries **its own run counter**, which is what makes it one-time. The counter for the shared codes lives on the browser session, so anyone who opens a private tab starts a fresh session and gets another run; a one-time code is presented again on that new session and is refused. A recipient can also be linked straight in with `?code=QFWORK-TRIAL-a308b5`, which fills the gate in for them and then strips the code from the address bar.
+Each code carries **its own run counter**, which is what makes it one-time. The counter for the shared codes lives on the browser session, so anyone who opens a private tab starts a fresh session and gets another run; a one-time code is presented again on that new session and is refused. A recipient can also be linked straight in with `?code=QFWORK-TRIAL-a308b5`, which redeems the code in the background on load and strips it from the address bar — their first click then goes straight through with no prompt at all.
 
 `ACCESS_CODE_SALES` is the older shared code for prospects. It still works so nothing breaks mid-flight, but it has exactly the reload weakness described above; prefer the one-time list and leave it blank.
 
-**The browser gate is not the control.** `public/access-gate.js` covers the page so visitors see a code prompt instead of a live product, but it is bypassable by anyone reading the page source. The restriction that matters is server-side: `/api/conversation`, `/api/analyze` and `/api/interview-feedback` each require a session token issued by `/api/access`, and the trial run is charged inside `/api/conversation` — the moment conversational-video billing begins. Reloading the page therefore cannot buy additional sessions, and the codes themselves are never sent to the browser.
+**The browser gate is not the control.** `public/access-gate.js` opens a code prompt when a visitor picks a scenario, so the marketing page stays readable and only the product is behind the code. It is bypassable by anyone reading the page source. The restriction that matters is server-side: `/api/conversation`, `/api/analyze` and `/api/interview-feedback` each require a session token issued by `/api/access`, and the trial run is charged inside `/api/conversation` — the moment conversational-video billing begins. Reloading the page therefore cannot buy additional sessions, and the codes themselves are never sent to the browser.
 
 Sessions are held in server memory with a four-hour sliding expiry; a restart clears them, and the visitor simply enters their code again. What a one-time code has *spent* is separate state and is written to disk — `TRIAL_CODES_STATE`, by default `trial-codes-used.json` beside `server.js` — so a restart cannot hand a used code back. That default file lives inside the container and is therefore rebuilt on redeploy; point the variable at a mounted volume (`/data/trial-codes-used.json`) if codes must stay spent across deployments. The issued list itself is configuration and stays in the environment, so only the tally needs persisting — no database.
 
@@ -237,7 +237,7 @@ Any container or VM host is suitable. Deployment consists of:
 └── public/
     ├── exam.html          Main application interface
     ├── index.html         Text-based practice mode
-    ├── access-gate.js     Access-code prompt shared by both pages
+    ├── access-gate.js     Access-code modal shared by both pages (opens on first gated click)
     ├── pcm-worklet.js     Audio capture worklet
     ├── img/               Landing-page photography (placeholders — see below)
     └── logo.png           Brand mark
