@@ -57,6 +57,19 @@ function normCode(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+// How long ONE call may run, in seconds. This is a separate cap from the
+// number of runs: the demo tier is uncapped on runs but was, until now, still
+// cut off at the shared 5-minute TAVUS_MAX_CALL_SECONDS like a prospect.
+// TAVUS_MAX_CALL_SECONDS_DEMO overrides it for our own demos; blank falls back
+// to the shared value so nothing changes for the sales tier.
+function callSeconds(tier) {
+  const shared = parseInt(process.env.TAVUS_MAX_CALL_SECONDS || '300', 10);
+  const base   = Number.isFinite(shared) && shared > 0 ? shared : 300;
+  if (tier !== 'demo') return base;
+  const demo = parseInt(process.env.TAVUS_MAX_CALL_SECONDS_DEMO, 10);
+  return Number.isFinite(demo) && demo > 0 ? demo : base;
+}
+
 // Number of runs a tier gets. Blank or 0 in the environment means unlimited.
 function runCap(tier) {
   const raw = tier === 'demo' ? process.env.TRIAL_RUNS_DEMO : process.env.TRIAL_RUNS_SALES;
@@ -328,6 +341,7 @@ module.exports = {
   consumeRun,
   runsLeft,
   runCap,
+  callSeconds,
   redactForTier,
   LOCKED_SECTIONS,
   UNLIMITED

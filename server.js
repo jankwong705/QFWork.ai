@@ -197,19 +197,23 @@ app.post('/api/conversation', async (req, res) => {
   // Scenario-specific persona (e.g. the patient presentation executive).
   // Falls back to the default interviewer persona if the env var isn't set.
   const personaId = scenario.personaIdEnv ? (process.env[scenario.personaIdEnv] || undefined) : undefined;
+  // Per-call time limit for this session's tier — demos get their own, longer
+  // cap; the sales tier keeps the shared 5 minutes.
+  const maxSeconds = access.callSeconds(session.tier);
   try {
     const convo = await createConversation({
       conversationName:      `QFwork — ${scenarioTitle}`,
       conversationalContext: context,
       customGreeting:        scenario.greeting,
       callbackUrl:           process.env.TAVUS_CALLBACK_URL || undefined,
-      personaId
+      personaId,
+      maxSeconds
     });
     return res.status(200).json({
       conversationId:  convo.conversation_id,
       conversationUrl: convo.conversation_url,
       scenarioPrompt:  scenario.prompt,
-      maxSeconds:      parseInt(process.env.TAVUS_MAX_CALL_SECONDS || '300', 10),
+      maxSeconds,
       runsLeft:        charged.runsLeft
     });
   } catch (error) {
@@ -395,7 +399,8 @@ server.listen(PORT, () => {
 
   // The access gate is the only thing standing between a public URL and our
   // Tavus/Groq bill, so make its state loud at boot.
-  const cap = (t) => access.runCap(t) === access.UNLIMITED ? 'unlimited runs' : `${access.runCap(t)} run(s)`;
+  const mmss = (sec) => `${Math.floor(sec / 60)}m${sec % 60 ? ` ${sec % 60}s` : ''}`;
+  const cap = (t) => `${access.runCap(t) === access.UNLIMITED ? 'unlimited runs' : `${access.runCap(t)} run(s)`}, ${mmss(access.callSeconds(t))}/call`;
   if (access.isConfigured()) {
     console.log(`  Access : demo code ${state(!!process.env.ACCESS_CODE_DEMO)} (${cap('demo')})  ·  sales code ${state(!!process.env.ACCESS_CODE_SALES)} (${cap('sales')})`);
     const t = access.trialStats();
