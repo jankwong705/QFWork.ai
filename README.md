@@ -133,11 +133,28 @@ Each code carries **its own run counter**, which is what makes it one-time. The 
 
 **The browser gate is not the control.** `public/access-gate.js` opens a code prompt when a visitor picks a scenario, so the marketing page stays readable and only the product is behind the code. It is bypassable by anyone reading the page source. The restriction that matters is server-side: `/api/conversation`, `/api/analyze` and `/api/interview-feedback` each require a session token issued by `/api/access`, and the trial run is charged inside `/api/conversation` — the moment conversational-video billing begins. Reloading the page therefore cannot buy additional sessions, and the codes themselves are never sent to the browser.
 
-Sessions are held in server memory with a four-hour sliding expiry; a restart clears them, and the visitor simply enters their code again. What a one-time code has *spent* is separate state and is written to disk — `TRIAL_CODES_STATE`, by default `trial-codes-used.json` beside `server.js` — so a restart cannot hand a used code back. That default file lives inside the container and is therefore rebuilt on redeploy; point the variable at a mounted volume (`/data/trial-codes-used.json`) if codes must stay spent across deployments. The issued list itself is configuration and stays in the environment, so only the tally needs persisting — no database.
+Sessions are held in server memory with a four-hour sliding expiry; a restart clears them, and the visitor simply enters their code again. What a one-time code has *spent* is separate state and is kept in the database (see [Payments and the database](#payments-and-the-database)), so neither a restart nor a redeploy can hand a used code back. The issued list itself is configuration and stays in the environment. The tally used to live in `trial-codes-used.json`; if that file is present on first boot it is imported once.
 
 On the sales tier the withheld sections — presence, the voice narrative, line-by-line corrections, the model answer, and all but the first strength and improvement — are **removed from the response** by `redactForTier()` in `access.js` rather than hidden with CSS. They are consequently absent from the page source, from Print / Save as PDF and from the HTML export. The report shows a locked placeholder in their place, alongside a link to the free consultation.
 
 Set `CALENDLY_URL` to the booking link for that consultation. If it is unset the booking card is hidden rather than shown broken, and the server says so at startup.
+
+### Payments and the database
+
+A third tier, **paid**, is bought rather than handed out. There are no user accounts: a payment mints a **paid access code** (`QF-7KQ2-M9XD-4TPA`) holding a balance of sessions, redeemed through the same gate. Paid sessions get the complete report. Buying while signed in on a paid code tops that code up instead of minting a second one, and the browser remembers a paid code (localStorage) so customers are not asked for it on every visit.
+
+```
+pricing card → POST /api/checkout → provider's checkout page
+            → provider webhook → order marked paid + code minted (one SQL statement)
+            → checkout-return.html polls /api/checkout/status → shows the code, signs the browser in
+```
+
+- **Provider.** `payments.js` is provider-neutral; each gateway is a module under `providers/`, chosen by `PAYMENT_PROVIDER`. Until a real one is chosen, `mock` stands in: `mock-checkout.html` has Pay and Cancel buttons that make the server send a *signed* webhook to itself, so the real webhook path is exercised end to end. It is refused in production unless `ALLOW_MOCK_PAYMENTS=true`.
+- **Prices** are set by the server (`PLANS`) and recorded on the order at checkout; the webhook can only confirm what was asked for, and a mismatched amount is not fulfilled.
+- **Idempotent.** A retried or duplicated webhook finds no pending order and mints nothing.
+- **Charging** happens in `/api/conversation` as a single conditional `UPDATE`, so two calls started together on one code cannot both get through. If Tavus fails to start the call, the session is refunded — for one-time trial codes too, which previously stayed charged.
+- **Database.** `db.js` uses Postgres when `DATABASE_URL` is set (Neon in production) and otherwise PGlite — real Postgres running in-process, stored under `.data/` — so development needs no setup and the SQL is identical. Render's disk is wiped on every deploy, so the server refuses to start with payments on and no `DATABASE_URL` in production. If the database is unreachable, the paid paths fail closed with a 503.
+- **Support.** With `ADMIN_TOKEN` set, `/api/admin` lists codes and orders, looks up a balance, issues or tops up a code by hand, and exports everything as JSON — see the header of `admin.js` for the routes.
 
 ### Session duration
 
@@ -207,9 +224,17 @@ Run `npm run check` at any time to verify that the configured personas belong to
 | `TRIAL_RUNS_DEMO` | No | Sessions per demo visitor; `0` or blank means unlimited |
 | `TRIAL_RUNS_SALES` | No | Sessions per sales visitor, default `1` |
 | `CALENDLY_URL` | Recommended | Free-consultation booking link; the card is hidden if unset |
+| `DATABASE_URL` | In production | Neon Postgres connection string; blank uses local PGlite under `.data/` |
+| `PAYMENT_PROVIDER` | No | `mock` (placeholder) or a real provider; blank turns purchases off |
+| `ALLOW_MOCK_PAYMENTS` | No | `true` to allow the mock provider in production (staging only) |
+| `PAYMENT_API_KEY`, `PAYMENT_WEBHOOK_SECRET` | With a real provider | Provider credentials |
+| `PLANS`, `PLANS_CURRENCY` | No | `id:sessions:price` list, default placeholder HKD prices |
+| `TAVUS_MAX_CALL_SECONDS_PAID` | No | Per-call cap for paid sessions |
+| `PUBLIC_BASE_URL` | Recommended | Public address used in checkout return links |
+| `ADMIN_TOKEN` | No | Enables `/api/admin` support endpoints |
 | `PORT` | No | Server port, default `3000`; set automatically by most hosts |
 
-¹ At least one of the two access codes must be set. With neither, the trial is closed to every visitor and the server reports this at startup.
+¹ At least one of the two access codes must be set, unless payments are on. With neither, the trial is closed to every visitor and the server reports this at startup.
 
 Personas are bound to the Tavus account that created them. After changing `TAVUS_API_KEY`, re-run `npm run setup` and update both persona ids.
 
@@ -232,12 +257,18 @@ Any container or VM host is suitable. Deployment consists of:
 ├── voice-metrics.js       Pitch and loudness DSP, speech timing, clarity scoring
 ├── tavus.js               Conversational video API client, transcript extraction
 ├── access.js              Access codes, trial sessions, run limits, report gating
+├── db.js                  Postgres (Neon) or local PGlite; schema
+├── payments.js            Checkout, webhook fulfilment, order status (provider-neutral)
+├── providers/mock.js      Placeholder payment gateway
+├── admin.js               Support endpoints behind ADMIN_TOKEN
 ├── setup-tavus.js         One-time persona provisioning
 ├── check-tavus.js         Configuration diagnostics
 └── public/
     ├── exam.html          Main application interface
     ├── index.html         Text-based practice mode
     ├── access-gate.js     Access-code modal shared by both pages (opens on first gated click)
+    ├── checkout-return.html  After payment: confirms, shows the code, signs in
+    ├── mock-checkout.html    Placeholder checkout page (PAYMENT_PROVIDER=mock)
     ├── pcm-worklet.js     Audio capture worklet
     ├── img/               Landing-page photography (placeholders — see below)
     └── logo.png           Brand mark
@@ -271,6 +302,11 @@ Endpoints marked **gated** require the `X-QF-Access` header carrying a session t
 | `POST /api/interview-feedback` | Yes | Generate the report from transcript, audio and perception data |
 | `POST /api/abandon` | — | End an abandoned session |
 | `POST /api/analyze` | Yes | Text-only feedback, used by the text practice mode |
+| `GET /api/plans` | — | Purchasable plans, for the pricing section |
+| `POST /api/checkout` | Optional | Start a checkout; returns the provider URL. With a paid session, tops up that code |
+| `GET /api/checkout/status?order=` | — | Order status; returns the code once paid |
+| `POST /api/payments/webhook` | Signature | Provider payment confirmation (raw body) |
+| `/api/admin/*` | `ADMIN_TOKEN` | Support tools, see `admin.js` |
 | `GET /health` | — | Liveness probe |
 
 `/api/access` is rate-limited to eight attempts per IP per minute. `/api/abandon` is deliberately ungated: it only ever stops billing, and it is delivered by `sendBeacon`, which cannot set headers.

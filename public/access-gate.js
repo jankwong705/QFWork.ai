@@ -27,16 +27,28 @@
 //   window.QFAccess.runsLeft()      → number, or null when uncapped
 //   window.QFAccess.headers()       → { 'X-QF-Access': token } for fetch()
 //   window.QFAccess.expired()       → drop the session, re-open the modal (401)
-// Fires a 'qf-access-granted' event on document each time a code is accepted.
+//   window.QFAccess.redeem(code)    → promise<{ ok, error }>, sign in with a code (no modal)
+//   window.QFAccess.forget()        → sign out and forget a remembered paid code
+//   window.QFAccess.plans()         → promise<{ enabled, plans }> from /api/plans
+//   window.QFAccess.buyUrl          → where "Buy sessions" links point
+// Fires a 'qf-access-granted' event on document each time a code is accepted,
+// and 'qf-access-changed' whenever the session or its balance changes.
 // ============================================================
 (function () {
   'use strict';
 
   var STORE_KEY = 'qfAccess';
+  // A PAID code is remembered across tabs and restarts (localStorage), unlike
+  // the session: a customer who bought ten sessions should not have to dig
+  // out their code every time they open the site. Trial codes are not kept.
+  var PAID_KEY  = 'qfPaidCode';
+  var BUY_URL   = 'exam.html#pricing';
+  var plansPromise = null;    // /api/plans, fetched once at boot
   var session = { token: null, tier: null, runsLeft: null, calendlyUrl: '' };
 
   var pendingAction = null;   // what the visitor clicked before the modal opened
   var pendingErr    = '';     // message to show the first time the modal opens
+  var lastError     = '';     // why the last redeem() failed, for QFAccess.redeem
   var readyPromise  = null;   // resolves once the boot-time check has settled
   var lastFocus     = null;   // element to hand focus back to on close
 
@@ -49,13 +61,21 @@
       if (raw) session = Object.assign(session, JSON.parse(raw));
     } catch (e) { /* private mode / storage disabled — just show the gate */ }
   }
+  function changed() {
+    try { document.dispatchEvent(new CustomEvent('qf-access-changed', { detail: { tier: session.tier, runsLeft: session.runsLeft } })); } catch (e) {}
+  }
   function save() {
     try { sessionStorage.setItem(STORE_KEY, JSON.stringify(session)); } catch (e) {}
+    changed();
   }
   function clear() {
     session = { token: null, tier: null, runsLeft: null, calendlyUrl: '' };
     try { sessionStorage.removeItem(STORE_KEY); } catch (e) {}
+    changed();
   }
+  function rememberPaid(code) { try { localStorage.setItem(PAID_KEY, code); } catch (e) {} }
+  function rememberedPaid()   { try { return localStorage.getItem(PAID_KEY) || ''; } catch (e) { return ''; } }
+  function forgetPaid()       { try { localStorage.removeItem(PAID_KEY); } catch (e) {} }
 
   // ── styles ──
   var css = document.createElement('style');
@@ -95,6 +115,9 @@
     '.qf-gate-foot{margin:20px 0 0;padding-top:18px;border-top:1px solid #eef2f4;',
     '  font-size:12.5px;line-height:1.55;color:#98a2b3;}',
     '.qf-gate-foot a{color:#0d7a6f;}',
+    '.qf-gate-buy{display:none;margin:0 0 6px;}',
+    '.qf-gate-buy.on{display:block;}',
+    '.qf-gate-buy a{font-weight:600;}',
     'html.qf-locked,body.qf-locked{overflow:hidden;}'
   ].join('');
   document.head.appendChild(css);
@@ -122,7 +145,10 @@
     '    <p id="qf-gate-err" role="alert" aria-live="polite"></p>',
     '    <button id="qf-gate-btn" type="submit">Continue</button>',
     '  </form>',
-    '  <p class="qf-gate-foot">Don\'t have a code? <a href="mailto:hello@qfwork.ai?subject=QFwork.ai%20trial%20access">Request access</a> and we\'ll send you one.</p>',
+    '  <div class="qf-gate-foot">',
+    '    <p class="qf-gate-buy" id="qf-gate-buy">No code yet? <a href="' + BUY_URL + '" data-qf-buy>Buy practice sessions →</a></p>',
+    '    Don\'t have a code? <a href="mailto:hello@qfwork.ai?subject=QFwork.ai%20trial%20access">Request access</a> and we\'ll send you one.',
+    '  </div>',
     '</div>'
   ].join('');
 
@@ -185,19 +211,23 @@
   }
 
   // A used-up one-time code is a dead end: retyping it will never work, so the
-  // refusal offers the booking link instead of inviting another attempt.
+  // refusal offers the booking link — and buying sessions, when that is open —
+  // instead of inviting another attempt.
   // The message is set as text, never HTML — it comes from the server.
-  function failSpent(msg, url) {
+  function failSpent(msg, url, canBuy) {
     err.textContent = msg;
     input.classList.add('qf-bad');
-    if (!url) return;
-    err.appendChild(document.createElement('br'));
-    var a = document.createElement('a');
-    a.href = url;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    a.textContent = 'Book your free review →';
-    err.appendChild(a);
+    function link(href, text, newTab) {
+      err.appendChild(document.createElement('br'));
+      var a = document.createElement('a');
+      a.href = href;
+      a.textContent = text;
+      if (newTab) { a.target = '_blank'; a.rel = 'noopener'; }
+      else a.setAttribute('data-qf-buy', '');
+      err.appendChild(a);
+    }
+    if (canBuy) link(BUY_URL, 'Buy practice sessions →', false);
+    if (url) link(url, 'Book your free review →', true);
   }
 
   // A code carried in the link (?code=QFWORK-TRIAL-a308b5). These are emailed
@@ -223,12 +253,16 @@
 
     if (r.status === 403 && data.code === 'trial-spent') {
       var spent = data.error || 'This code has already been used.';
+      lastError = spent;
       if (quiet) { pendingErr = spent; return false; }
-      failSpent(spent, data.calendlyUrl);
+      failSpent(spent, data.calendlyUrl, data.canBuy);
       return false;
     }
     if (!r.ok) {
       var msg = data.error || 'Could not check that code. Please try again.';
+      lastError = msg;
+      // A remembered paid code the server no longer recognises is useless.
+      if (r.status === 401 && code === rememberedPaid()) forgetPaid();
       if (quiet) { pendingErr = msg; return false; }
       fail(msg);
       return false;
@@ -239,6 +273,7 @@
       runsLeft: data.runsLeft == null ? null : data.runsLeft,
       calendlyUrl: data.calendlyUrl || ''
     };
+    if (data.tier === 'paid') rememberPaid(code);
     save();
     return true;
   }
@@ -288,7 +323,18 @@
     if (await revalidate()) return true;
 
     var pre = codeFromUrl();
-    if (!pre) return false;
+    if (!pre) {
+      // A paid code from an earlier visit signs the customer straight back in.
+      var kept = rememberedPaid();
+      if (!kept) return false;
+      // If it no longer works, the visitor simply sees the normal prompt —
+      // not an error about a code they never typed this visit.
+      try {
+        var ok = await redeem(kept, true);
+        if (!ok) pendingErr = '';
+        return ok;
+      } catch (e) { return false; }
+    }
 
     // Take the code back out of the address bar — these links get screen-
     // shared, and a stale one in history is just confusing.
@@ -313,6 +359,24 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && !overlay.hidden) close();
     });
+    // "Buy sessions" links inside the modal: close it so the pricing section
+    // underneath is visible (on exam.html the link only changes the hash).
+    overlay.addEventListener('click', function (e) {
+      var a = e.target.closest && e.target.closest('[data-qf-buy]');
+      if (a) close();
+    });
+    plans().then(function (p) {
+      if (p.enabled && p.plans.length) document.getElementById('qf-gate-buy').classList.add('on');
+    });
+  }
+
+  function plans() {
+    if (!plansPromise) {
+      plansPromise = fetch('/api/plans')
+        .then(function (r) { return r.ok ? r.json() : { enabled: false, plans: [] }; })
+        .catch(function () { return { enabled: false, plans: [] }; });
+    }
+    return plansPromise;
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', attach);
@@ -326,6 +390,21 @@
     runsLeft:    function () { return session.runsLeft; },
     calendlyUrl: function () { return session.calendlyUrl; },
     setRunsLeft: function (n) { session.runsLeft = n == null ? null : n; save(); },
+    refresh:     function () { return revalidate(); },
+    plans:       function () { return plans(); },
+    buyUrl:      BUY_URL,
+
+    // Sign in with a code without the modal — the checkout return page uses
+    // this with the code it was just given.
+    redeem: function (code) {
+      return redeem(String(code || '').trim(), true)
+        .then(function (ok) { pendingErr = ''; return { ok: ok, error: ok ? '' : lastError }; })
+        .catch(function () { return { ok: false, error: 'Network problem — check your connection and try again.' }; });
+    },
+
+    // Sign out on this device, including the remembered paid code. For a
+    // shared computer.
+    forget: function () { forgetPaid(); clear(); },
     headers:     function () { return session.token ? { 'X-QF-Access': session.token } : {}; },
     unlocked:    function () { return !!session.token; },
     ready:       function () { return readyPromise; },

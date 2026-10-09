@@ -24,3 +24,6 @@ trial-codes-used.json.tmp
 # Logs
 *.log
 npm-debug.log*
+
+# Local database used when DATABASE_URL is not set (PGlite, see db.js).
+.data/

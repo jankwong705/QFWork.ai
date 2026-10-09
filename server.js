@@ -8,13 +8,18 @@
 //  • POST /api/voice-sample/:id     → receive the mic recording (WAV) for voice analysis
 //  • POST /api/interview-feedback   → transcript + perception + voice audio → feedback report
 //  • POST /api/abandon              → best-effort end of an abandoned call (stops billing)
+//  • GET  /api/plans                → what can be bought (pricing section)
+//  • POST /api/checkout             → start a checkout, returns the provider's page
+//  • GET  /api/checkout/status      → polled by checkout-return.html
+//  • POST /api/payments/webhook     → provider confirms a payment → code minted
+//  • /api/admin/*                   → support tools, behind ADMIN_TOKEN (admin.js)
 //
 //  API credentials are read from the environment here on the server and
 //  are never exposed to the browser.
 //
 //  Everything that spends money — /api/analyze, /api/conversation and
 //  /api/interview-feedback — requires a trial session from /api/access.
-//  See access.js.
+//  See access.js; payments in payments.js; storage in db.js.
 // ============================================================
 
 const express = require('express');
@@ -25,19 +30,46 @@ require('dotenv').config();
 const { generateFeedback } = require('./feedback');
 const { analyzeVoice }     = require('./voice-metrics');
 const { createConversation, getConversationTranscript, endConversation, ensurePerceptionLayer } = require('./tavus');
-const access = require('./access');
+const access   = require('./access');
+const db       = require('./db');
+const payments = require('./payments');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// Render (and any other host) sits in front of us; without this every request
+// looks like it came from the proxy and the access-code rate limit becomes
+// global.
+app.set('trust proxy', 1);
+
+// ============================================================
+// POST /api/payments/webhook — the provider confirms a payment.
+// ------------------------------------------------------------
+// Registered BEFORE express.json(): the signature is computed over the exact
+// bytes received, and a parsed-then-re-serialised body would not match.
+// A 4xx tells the provider to stop retrying (bad signature); a 5xx tells it
+// to retry later (database down), which is safe because fulfilment is
+// idempotent.
+// ============================================================
+app.post('/api/payments/webhook', express.raw({ type: () => true, limit: '1mb' }), async (req, res) => {
+  if (!payments.enabled()) return res.status(404).end();
+  try {
+    await payments.handleWebhook(req.body, req.headers);
+    return res.status(200).json({ received: true });
+  } catch (e) {
+    if (/signature/i.test(e.message)) {
+      console.warn(`[payments] webhook rejected: ${e.message}`);
+      return res.status(400).json({ error: 'Invalid signature.' });
+    }
+    console.error(`[payments] webhook failed: ${e.message}`);
+    return res.status(500).json({ error: 'Webhook processing failed.' });
+  }
+});
+
 app.use(express.json());
 app.use(cors());
-
-// Railway and friends sit in front of us; without this every request looks
-// like it came from the proxy and the access-code rate limit becomes global.
-app.set('trust proxy', 1);
 
 // Make the live interview the front door.
 app.get('/', (req, res) => res.redirect('/exam.html'));
@@ -57,14 +89,25 @@ app.use(express.static('public'));
 // calls they get. A one-time code additionally carries its own run counter,
 // so a spent code is refused here rather than at the first call; see access.js.
 // ============================================================
-app.post('/api/access', (req, res) => {
-  if (!access.isConfigured()) {
+// Every database call on the money path goes through here: if the database is
+// unreachable the request fails CLOSED, never through to an uncharged call.
+function dbDown(res, e) {
+  console.error(`[db] ${e.message}`);
+  return res.status(503).json({ error: 'The service is temporarily unavailable. Please try again in a minute.', code: 'db-unavailable' });
+}
+
+app.post('/api/access', async (req, res) => {
+  if (!access.isConfigured() && !payments.enabled()) {
     return res.status(503).json({ error: 'The trial is not accepting codes right now. Please contact us for access.' });
   }
   if (access.tooManyAttempts(req.ip)) {
     return res.status(429).json({ error: 'Too many attempts. Please wait a minute and try again.' });
   }
-  const match = access.checkCode(req.body && req.body.code);
+  let match, spent;
+  try {
+    match = await access.checkCode(req.body && req.body.code);
+    spent = await access.trialSpent(match);
+  } catch (e) { return dbDown(res, e); }
   if (!match) {
     return res.status(401).json({ error: "That code isn't valid. Check it and try again, or contact us for access." });
   }
@@ -77,38 +120,84 @@ app.post('/api/access', (req, res) => {
 
   // A one-time code with nothing left. The booking link travels with the
   // refusal so the dead end still leads somewhere.
-  if (access.trialSpent(match.code)) {
+  if (spent) {
     console.log('[access] one-time code already spent');
     return res.status(403).json({
       error: 'This code has already been used. Book a free review with one of our recruitment experts to go further.',
       code:  'trial-spent',
-      calendlyUrl: process.env.CALENDLY_URL || ''
+      calendlyUrl: process.env.CALENDLY_URL || '',
+      canBuy:      payments.enabled()
     });
   }
 
   const token   = access.openSession(match.tier, match.code);
   const session = access.getSession(token);
-  console.log(`[access] ${match.tier} session opened${match.code ? ' (one-time code)' : ''}`);
+  let left;
+  try { left = await access.runsLeft(session); } catch (e) { return dbDown(res, e); }
+  console.log(`[access] ${match.tier} session opened${match.code ? (match.tier === 'paid' ? ` (paid code, ${left} left)` : ' (one-time code)') : ''}`);
   return res.status(200).json({
     ok: true,
     token,
     tier: match.tier,
-    runsLeft:    access.runsLeft(session),
+    runsLeft:    left,
     calendlyUrl: process.env.CALENDLY_URL || ''
   });
 });
 
-app.get('/api/access/verify', (req, res) => {
+app.get('/api/access/verify', async (req, res) => {
   const token   = req.get('X-QF-Access') || req.query.accessToken;
   const session = access.getSession(token);
   if (!session) return res.status(401).json({ ok: false });
+  let left;
+  try { left = await access.runsLeft(session); } catch (e) { return dbDown(res, e); }
   return res.status(200).json({
     ok: true,
     tier:        session.tier,
-    runsLeft:    access.runsLeft(session),
+    runsLeft:    left,
     calendlyUrl: process.env.CALENDLY_URL || ''
   });
 });
+
+
+// ============================================================
+// PAYMENTS (see payments.js)
+// ------------------------------------------------------------
+// GET  /api/plans                  → { enabled, plans:[{ id, credits, amount, currency }] }
+// POST /api/checkout  { plan }     → { url }   (send the browser there)
+//      With a paid session (X-QF-Access) the purchase tops up that code.
+// GET  /api/checkout/status?order= → { status, credits, topup, code?, balance? }
+// ============================================================
+app.get('/api/plans', (req, res) => res.json(payments.publicPlans()));
+
+app.post('/api/checkout', async (req, res) => {
+  if (!payments.enabled()) return res.status(404).json({ error: 'Purchases are not open yet.' });
+  if (access.tooManyAttempts('checkout:' + req.ip)) {
+    return res.status(429).json({ error: 'Too many attempts. Please wait a minute and try again.' });
+  }
+  const token   = req.get('X-QF-Access');
+  const session = token ? access.getSession(token) : null;
+  const baseUrl = (process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+  try {
+    const { url } = await payments.createCheckout({ planId: req.body && req.body.plan, baseUrl, session });
+    return res.status(200).json({ url });
+  } catch (e) {
+    if (e.status === 400) return res.status(400).json({ error: e.message });
+    console.error(`[payments] checkout failed: ${e.message}`);
+    return res.status(502).json({ error: 'Could not start the checkout. Please try again.' });
+  }
+});
+
+app.get('/api/checkout/status', async (req, res) => {
+  if (!payments.enabled()) return res.status(404).json({ error: 'Purchases are not open yet.' });
+  try {
+    const st = await payments.status(req.query.order);
+    if (!st) return res.status(404).json({ error: 'Order not found.' });
+    return res.status(200).json(st);
+  } catch (e) { return dbDown(res, e); }
+});
+
+payments.mountProviderRoutes(app);
+app.use('/api/admin', require('./admin'));
 
 
 // ============================================================
@@ -182,11 +271,19 @@ app.post('/api/conversation', async (req, res) => {
   // This is the moment Tavus starts billing, so it is also the moment the
   // trial run is charged. Doing it here (not in the browser) means a page
   // reload cannot hand someone a fresh set of runs.
-  const charged = access.consumeRun(session);
+  let charged;
+  try { charged = await access.consumeRun(session); } catch (e) { return dbDown(res, e); }
+  if (!charged.ok && charged.reason === 'no-credits') {
+    return res.status(403).json({
+      error: "You've used all the sessions on this code. Buy more to keep practising.",
+      code:  'no-credits'
+    });
+  }
   if (!charged.ok) {
     return res.status(403).json({
       error: "You've used your trial session. Book a free review with one of our recruitment experts to go further.",
-      code:  'trial-spent'
+      code:  'trial-spent',
+      canBuy: payments.enabled()
     });
   }
   // Optionally tailor the role-play to whatever the user told us about themselves.
@@ -218,8 +315,9 @@ app.post('/api/conversation', async (req, res) => {
     });
   } catch (error) {
     // The call never started, so nothing was billed — give the run back
-    // rather than burning a prospect's only try on our own outage.
-    session.runs = Math.max(0, session.runs - 1);
+    // rather than burning a prospect's only try (or a customer's paid
+    // session) on our own outage.
+    await access.refundRun(session).catch(e => console.error(`[access] refund failed: ${e.message}`));
     console.error('Create conversation error:', error.message);
     return res.status(502).json({ error: error.message });
   }
@@ -390,7 +488,29 @@ app.get('/health', (req, res) => res.json({ status: 'ok', message: 'QFwork.ai se
 
 const server = http.createServer(app);
 
-server.listen(PORT, () => {
+async function boot() {
+  try {
+    await db.init();
+    await access.importLegacyState();
+  } catch (e) {
+    console.error(`\nCannot start: database unavailable — ${e.message}`);
+    console.error(process.env.DATABASE_URL ? 'Check DATABASE_URL.' : 'The local PGlite store under .data/ could not be opened.');
+    process.exit(1);
+  }
+  // A misconfigured payment path either loses customers' money or gives
+  // sessions away, so it stops the boot rather than limping along.
+  const problems = payments.configProblems();
+  if (problems.length) {
+    console.error('\nCannot start: payments are misconfigured —');
+    problems.forEach(p => console.error(`  • ${p}`));
+    console.error('Fix the above, or unset PAYMENT_PROVIDER to run without payments.\n');
+    process.exit(1);
+  }
+  const t = await access.trialStats();
+  server.listen(PORT, () => banner(t));
+}
+
+function banner(t) {
   const state = (ok) => ok ? 'configured' : 'MISSING';
   console.log(`\nQFwork.ai server listening on http://localhost:${PORT}`);
   console.log(`  Groq   : ${state(!!process.env.GROQ_API_KEY)}  (feedback report, speech-to-text)`);
@@ -403,13 +523,22 @@ server.listen(PORT, () => {
   const cap = (t) => `${access.runCap(t) === access.UNLIMITED ? 'unlimited runs' : `${access.runCap(t)} run(s)`}, ${mmss(access.callSeconds(t))}/call`;
   if (access.isConfigured()) {
     console.log(`  Access : demo code ${state(!!process.env.ACCESS_CODE_DEMO)} (${cap('demo')})  ·  sales code ${state(!!process.env.ACCESS_CODE_SALES)} (${cap('sales')})`);
-    const t = access.trialStats();
     console.log(t.total
       ? `  Trial  : ${t.total} one-time code(s) · ${t.used} used · ${t.total - t.used} left (${cap('sales')} each)`
       : `  Trial  : no one-time codes set — issue some into ACCESS_CODES_TRIAL`);
+  } else if (payments.enabled()) {
+    console.log(`  Access : no trial or demo codes set — only paid codes open the product`);
   } else {
     console.log(`  Access : NO CODES SET — the trial is closed to everyone. Set ACCESS_CODE_DEMO and/or ACCESS_CODES_TRIAL in .env`);
   }
+  console.log(`  DB     : ${db.label()}${db.kind() === 'pglite' && payments.isProduction() ? '  — NOT durable here: wiped on every deploy' : ''}`);
+  if (payments.enabled()) {
+    const plans = payments.plans().map(p => `${p.id} ${p.credits}× ${payments.formatAmount(p.amount, p.currency)}`).join(' · ');
+    console.log(`  Pay    : ${payments.providerName().toUpperCase()}${payments.providerName() === 'mock' ? ' (placeholder — no real money)' : ''}  ·  ${plans}  ·  ${mmss(access.callSeconds('paid'))}/call`);
+  } else {
+    console.log(`  Pay    : off — set PAYMENT_PROVIDER to sell sessions`);
+  }
+  console.log(`  Admin  : ${process.env.ADMIN_TOKEN ? 'enabled (/api/admin, ADMIN_TOKEN)' : 'off — set ADMIN_TOKEN to enable /api/admin'}`);
   // With no URL the booking card is hidden rather than shown broken, so this
   // line is the only place a missing link becomes visible.
   console.log(process.env.CALENDLY_URL
@@ -437,4 +566,6 @@ server.listen(PORT, () => {
       .catch(e => console.log(`  Vision : ${p.label} persona — check failed: ${e.message}`));
   }
   console.log('');
-});
+}
+
+boot();

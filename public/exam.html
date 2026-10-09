@@ -36,8 +36,16 @@
                   display:grid; place-items:center; font-weight:700; font-size:13px; letter-spacing:.02em; }
   .brand{ font-weight:700; letter-spacing:-.01em; font-size:16px; }
   .brand span{ color:var(--teal); }
-  .topbar .right{ margin-left:auto; font-size:13px; color:var(--mut); }
-  @media (max-width:560px){ .topbar .right{ display:none; } }
+  .topbar .right{ margin-left:auto; display:flex; align-items:center; gap:16px; font-size:13px; color:var(--mut); }
+  @media (max-width:560px){ .topbar .tagline{ display:none; } }
+  .navlink{ color:var(--ink); font-weight:600; text-decoration:none; }
+  .navlink:hover{ color:var(--teal); }
+  /* Remaining paid sessions. A button: clicking it goes to pricing to top up. */
+  .bal{ border:1px solid #cfe8e4; background:#e9f6f4; color:var(--teal-d); border-radius:999px;
+        padding:5px 12px; font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; white-space:nowrap; }
+  .bal:hover{ border-color:var(--teal); }
+  .bal.empty{ background:#fff4ed; border-color:#f6ddd0; color:var(--warn); }
+  [hidden]{ display:none !important; }
 
   main{ max-width:980px; margin:0 auto; padding:40px 22px 90px; }
   .view{ display:none; animation:rise .35s ease both; }
@@ -186,6 +194,44 @@
   @media (max-width:680px){
     .company-head h2{ font-size:23px; }
   }
+  /* ── HOME: pricing ──
+     Cards are built from GET /api/plans (PLANS on the server), so prices are
+     changed in one place. The whole section stays hidden while purchases are
+     off (no PAYMENT_PROVIDER). */
+  .pricing{ margin-top:52px; padding-top:38px; border-top:1px solid var(--line); scroll-margin-top:80px; }
+  .pricing-head{ max-width:620px; margin:0 0 24px; }
+  .pricing-head h2{ margin:0 0 8px; font-size:26px; letter-spacing:-.02em; font-weight:600; }
+  .pricing-head p{ margin:0; color:var(--mut); font-size:15px; line-height:1.55; }
+  .plans{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }
+  .plan{ position:relative; background:var(--card); border:1px solid var(--line); border-radius:18px; padding:24px 22px 22px;
+         box-shadow:var(--shadow); display:flex; flex-direction:column; }
+  .plan.best{ border-color:var(--teal); box-shadow:0 0 0 3px rgba(13,122,111,.10), var(--shadow); }
+  .plan .tag{ position:absolute; top:-11px; left:20px; background:var(--teal); color:#fff; font-size:11px; font-weight:700;
+              letter-spacing:.06em; text-transform:uppercase; border-radius:999px; padding:3px 10px; }
+  .plan h3{ margin:0 0 12px; font-size:16px; }
+  .plan .price{ font-size:34px; font-weight:600; letter-spacing:-.02em; line-height:1; }
+  .plan .price small{ font-size:14px; color:var(--mut); font-weight:500; margin-left:3px; letter-spacing:0; }
+  .plan .per{ margin:6px 0 16px; font-size:13px; color:var(--mut); min-height:18px; }
+  .plan ul{ margin:0 0 20px; padding-left:18px; font-size:13.5px; color:var(--ink); line-height:1.5; flex:1; }
+  .plan li{ margin:4px 0; }
+  .plan .btn{ width:100%; }
+  .pricing-note{ margin:18px 0 0; color:var(--mut); font-size:13px; line-height:1.55; }
+  .pricing-err{ margin:12px 0 0; color:#dc2626; font-size:13.5px; min-height:1em; }
+  .test-flag{ display:inline-block; margin-left:8px; background:#fff4ed; color:var(--warn); border:1px solid #f6ddd0;
+              border-radius:999px; padding:2px 9px; font-size:11px; font-weight:700; letter-spacing:.05em;
+              text-transform:uppercase; vertical-align:middle; }
+  .buy-cta{ margin-top:20px; background:var(--card); border:1px solid var(--teal); border-radius:18px; padding:22px 24px;
+            display:flex; flex-wrap:wrap; align-items:center; gap:14px 22px; box-shadow:var(--shadow); }
+  .buy-cta div{ flex:1 1 280px; }
+  .buy-cta h3{ margin:0 0 4px; font-size:17px; }
+  .buy-cta p{ margin:0; color:var(--mut); font-size:14px; line-height:1.5; }
+  .buy-cta .btn{ width:auto; }
+  .lock-buy{ margin:9px 0 0; font-size:13px; }
+  .lock-buy a{ color:var(--teal); font-weight:600; }
+  .pc-bal{ margin:0 0 14px; font-size:13.5px; color:var(--mut); line-height:1.5; }
+  .pc-bal b{ color:var(--ink); }
+  .pc-bal.empty{ color:var(--warn); }
+
   /* ── PRECALL ── */
   .pc{ max-width:560px; margin:0 auto; background:var(--card); border:1px solid var(--line); border-radius:20px; padding:30px; box-shadow:var(--shadow); }
   .back{ background:none; border:0; color:var(--mut); font:inherit; cursor:pointer; padding:0; margin-bottom:20px; }
@@ -358,7 +404,7 @@
      Strips app chrome so the browser's own "Save as PDF" produces a clean
      document, and keeps report sections from splitting across pages. */
   @media print{
-    .topbar, .fb-actions, .back, .btn, .cta, .locked{ display:none !important; }
+    .topbar, .fb-actions, .back, .btn, .cta, .buy-cta, .locked{ display:none !important; }
     html,body{ background:#fff; }
     main{ max-width:none; padding:0; }
     .view{ display:none !important; }
@@ -385,7 +431,11 @@
     <img class="logo" src="logo-mark.png" alt="QFwork" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'logo logo-fallback',textContent:'QF'}))" />
     <div class="brand">QFwork<span>.ai</span></div>
   </a>
-  <div class="right">AI Trainer for workplace communication</div>
+  <div class="right">
+    <span class="tagline">AI Trainer for workplace communication</span>
+    <a class="navlink" id="navPricing" href="#pricing" hidden>Pricing</a>
+    <button class="bal" id="qfBal" type="button" hidden onclick="goPricing()" title="Buy more sessions"></button>
+  </div>
 </div>
 
 <main>
@@ -474,6 +524,19 @@
       </div>
     </section>
 
+    <!-- ── Pricing ──
+         Filled in from /api/plans by renderPricing(); hidden until purchases
+         are switched on. -->
+    <section class="pricing" id="pricing" aria-labelledby="pricingHead" hidden>
+      <div class="pricing-head">
+        <h2 class="serif" id="pricingHead">Practice sessions<span class="test-flag" id="pricingTest" hidden>Test mode</span></h2>
+        <p>Each session is one live conversation with your AI partner and a full report — presence on camera, measured voice analysis, line-by-line rewrites and a model answer.</p>
+      </div>
+      <div class="plans" id="plans"></div>
+      <p class="pricing-err" id="pricingErr" role="alert"></p>
+      <p class="pricing-note">You'll get an access code that holds your sessions. It works on any device, so keep it somewhere safe. Already have a code? Buying while signed in with it adds the sessions to that code.</p>
+    </section>
+
     <!-- ── Sponsors / partners ──
          Placeholder wordmarks live in /public/img/sponsors/sponsor-1..5.svg.
          Drop the real logos in with the same filenames (SVG or PNG, on a
@@ -544,6 +607,7 @@
       <textarea id="ctx" placeholder="e.g. I'm a nurse applying to a hospital in Hong Kong · or · I work in logistics and want to present a delivery-time project"></textarea>
       <p class="ex">Leave it blank and the AI will simply ask you at the start — either way the conversation adapts to you.</p>
 
+      <p class="pc-bal" id="pcBal" hidden></p>
       <div class="devnote">🎥 Next you'll check your camera and microphone. Your voice is recorded during the call and analysed for tone, pacing and clarity — it powers your feedback report and is discarded right after.</div>
       <button class="btn btn-primary" id="startBtn" onclick="startCall()">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
@@ -677,6 +741,112 @@ document.querySelectorAll('.scn').forEach(el =>
   })
 );
 
+// ── pricing & balance ─────────────────────────────────────────
+// Purchases are optional: with no PAYMENT_PROVIDER on the server, /api/plans
+// says so and every buy surface below stays hidden.
+let PLANS = { enabled:false, plans:[] };
+
+function money(minor, currency){
+  const n = minor / 100;
+  const sym = currency === 'HKD' ? 'HK$' : currency + ' ';
+  return sym + (Number.isInteger(n) ? n : n.toFixed(2));
+}
+
+function renderPricing(){
+  const list = PLANS.enabled ? PLANS.plans : [];
+  $('pricing').hidden = !list.length;
+  $('navPricing').hidden = !list.length;
+  $('pricingTest').hidden = !PLANS.testMode;
+  if(!list.length) return;
+  // The plan with the lowest price per session is flagged, if there is a choice.
+  const per = p => p.amount / p.credits;
+  const best = list.length > 1 ? list.reduce((a,b) => per(b) < per(a) ? b : a) : null;
+  const mins = PLANS.callSeconds ? Math.round(PLANS.callSeconds / 60) : 0;
+  $('plans').innerHTML = list.map(p => `
+    <div class="plan ${p === best ? 'best' : ''}">
+      ${p === best ? '<span class="tag">Best value</span>' : ''}
+      <h3>${p.credits} session${p.credits > 1 ? 's' : ''}</h3>
+      <div class="price">${money(p.amount, p.currency)}</div>
+      <p class="per">${p.credits > 1 ? money(Math.round(per(p)), p.currency) + ' per session' : ''}</p>
+      <ul>
+        <li>${p.credits} live AI conversation${p.credits > 1 ? 's' : ''}${mins ? `, up to ${mins} min each` : ''}</li>
+        <li>Full report every time — nothing locked</li>
+        <li>Any scenario, any device</li>
+      </ul>
+      <button class="btn btn-primary" type="button" data-plan="${escapeHtml(p.id)}">Buy ${p.credits > 1 ? p.credits + ' sessions' : '1 session'}</button>
+    </div>`).join('');
+  $('plans').querySelectorAll('[data-plan]').forEach(b =>
+    b.addEventListener('click', () => startCheckout(b.dataset.plan, b)));
+}
+
+// Off to the provider's checkout. With a paid session the purchase tops up
+// that code; the server decides from the X-QF-Access header.
+async function startCheckout(planId, btn){
+  $('pricingErr').textContent = '';
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Opening checkout…';
+  try{
+    const r = await fetch('/api/checkout', {
+      method:'POST', headers:{'Content-Type':'application/json', ...QFAccess.headers()},
+      body: JSON.stringify({ plan: planId })
+    });
+    const data = await r.json().catch(() => ({}));
+    if(!r.ok || !data.url) throw new Error(data.error || 'Could not start the checkout.');
+    location.href = data.url;
+  }catch(e){
+    $('pricingErr').textContent = e.message + ' Please try again.';
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
+function goPricing(e){
+  if(e) e.preventDefault();
+  if(!PLANS.enabled) return;
+  show('home');
+  $('pricing').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+window.addEventListener('hashchange', () => { if(location.hash === '#pricing') goPricing(); });
+$('navPricing').addEventListener('click', goPricing);
+
+// The pill in the top bar and the line on the start-call screen. Only a paid
+// code shows a balance — trial visitors are not reminded of a counter.
+function renderBalance(){
+  const paid = QFAccess.tier() === 'paid';
+  const n = QFAccess.runsLeft();
+  const pill = $('qfBal'), line = $('pcBal');
+  pill.hidden = line.hidden = !paid;
+  if(!paid) return;
+  pill.textContent = n === 1 ? '1 session left' : `${n} sessions left`;
+  pill.classList.toggle('empty', !n);
+  line.classList.toggle('empty', !n);
+  line.innerHTML = n
+    ? `This call uses 1 of your <b>${n}</b> session${n === 1 ? '' : 's'}. · <button class="linkish" type="button" onclick="signOut()">Sign out on this device</button>`
+    : `You have no sessions left on this code. <button class="linkish" type="button" onclick="goPricing()">Buy more →</button>`;
+}
+function signOut(){ QFAccess.forget(); goHome(); }
+document.addEventListener('qf-access-changed', renderBalance);
+document.addEventListener('qf-access-granted', renderBalance);
+QFAccess.ready().then(renderBalance);
+
+QFAccess.plans().then(p => {
+  PLANS = p || PLANS;
+  renderPricing();
+  if(location.hash === '#pricing') setTimeout(goPricing, 60);
+});
+
+// Shown on gated reports and after a spent trial: the self-serve route to
+// the full report, alongside the expert booking.
+function buyCta(){
+  if(!PLANS.enabled || !PLANS.plans.length) return '';
+  return `<div class="buy-cta">
+    <div>
+      <h3>Get the full report every time</h3>
+      <p>Practice sessions come with the complete analysis — presence, measured voice, line-by-line rewrites and a model answer.</p>
+    </div>
+    <button class="btn btn-primary" type="button" onclick="goPricing()">See practice sessions</button>
+  </div>`;
+}
+
 // ── view switching (class-based, robust) ──
 function show(id){ ['home','precall','devcheck','room','busy','fb'].forEach(s => $(s).classList.toggle('active', s===id)); window.scrollTo(0,0); }
 function busy(text, sub){ $('busyText').textContent = text; $('busySub').textContent = sub || ''; show('busy'); }
@@ -791,6 +961,9 @@ function startCall(){
   // Re-checked rather than assumed: the precall form can sit open long enough
   // for the session to lapse, and the device check is a poor place to find out.
   QFAccess.require(async () => {
+    // A paid code at zero gets the buy screen now, not after the device check.
+    // The server still refuses the call either way.
+    if(QFAccess.tier() === 'paid' && QFAccess.runsLeft() === 0) return showTrialSpent('', 'no-credits');
     state.userContext = $('ctx').value;
     show('devcheck');
     $('dcStatus').textContent = '';
@@ -896,7 +1069,10 @@ async function joinCall(){
     });
     const data = await r.json();
     if(r.status === 401) return QFAccess.expired();
-    if(r.status === 403 && data.code === 'trial-spent') return showTrialSpent(data.error);
+    if(r.status === 403 && (data.code === 'trial-spent' || data.code === 'no-credits')){
+      if(data.code === 'no-credits') QFAccess.setRunsLeft(0);
+      return showTrialSpent(data.error, data.code);
+    }
     if(!r.ok) throw new Error(data.error || 'Could not start the session.');
     QFAccess.setRunsLeft(data.runsLeft);
 
@@ -980,14 +1156,17 @@ async function endCall(reason){
   finally{ state.ending = false; $('endBtn').disabled = false; }
 }
 
-// The trial is spent (sales tier, cap reached). Nothing was billed — send them
-// to the consultation instead of a dead end.
-function showTrialSpent(msg){
+// The trial is spent (sales tier, cap reached), or a paid code has run out
+// ('no-credits'). Nothing was billed — send them to buying more or the
+// consultation instead of a dead end.
+function showTrialSpent(msg, code){
   const url = QFAccess.calendlyUrl();
+  const out = code === 'no-credits';
   $('fb').innerHTML = `
-    <div class="fb-head"><h1 class="fbtitle serif">Your trial is complete</h1></div>
-    <div class="sec"><p style="margin:0;line-height:1.6;">${escapeHtml(msg || 'You’ve used your trial session.')}</p></div>
-    ${bookingCta(url, 'trial-spent')}
+    <div class="fb-head"><h1 class="fbtitle serif">${out ? 'You’re out of sessions' : 'Your trial is complete'}</h1></div>
+    <div class="sec"><p style="margin:0;line-height:1.6;">${escapeHtml(msg || (out ? 'You’ve used all the sessions on this code. Buy more to keep practising — they’re added to the same code.' : 'You’ve used your trial session.'))}</p></div>
+    ${buyCta()}
+    ${out ? '' : bookingCta(url, 'trial-spent')}
     <p style="margin-top:16px;"><button class="linkish" onclick="goHome()">← Back to scenarios</button></p>`;
   show('fb');
 }
@@ -1017,6 +1196,7 @@ function lockedSec(title, why, extraClass){
     <h3>${title}<span class="lock-tag">🔒 In your review</span></h3>
     <div class="skel"><i></i><i></i><i></i><i></i><i></i></div>
     <p class="lock-why">${why}</p>
+    ${PLANS.enabled && PLANS.plans.length ? `<p class="lock-buy"><a href="#pricing" onclick="goPricing(event)">Included in full reports with practice sessions →</a></p>` : ''}
   </div>`;
 }
 
@@ -1132,6 +1312,7 @@ function renderFeedback(f, voiceStats, tier, locked){
     <p class="foot">${(hasVoice || lockedSet.has('voice'))
       ? 'This report combines the conversation transcript, real acoustic analysis of your recorded voice (pitch, pacing, clarity, energy) and live camera observations.'
       : 'Voice audio wasn’t captured for this call, so delivery notes are inferred from the transcript’s word patterns. Allow microphone access on this page to unlock measured tone, pacing and clarity feedback.'}</p>
+    ${gated ? buyCta() : ''}
     ${bookingCta(bookUrl, gated ? 'gated' : 'full')}
     <div class="fb-actions">
       <button class="btn btn-primary" style="width:auto;" onclick="location.reload()">Practise again</button>
